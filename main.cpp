@@ -1,5 +1,6 @@
 #include "main.h"
 #include <cmath>
+#include <cstdio>
 
 pros::Controller master(pros::E_CONTROLLER_MASTER);
 pros::MotorGroup left_mg({1, 2, 3});
@@ -62,6 +63,8 @@ void updatepose(void*){
 
 	double both = inertial.get_heading();
 
+	printf("X: %.2f Y: %.2f H: %.2f\n", botx, boty, both);
+
 	(void)boty;
 	(void)botx;
 	(void)both;
@@ -85,7 +88,6 @@ void initialize() {
 }
 
 void disabled() {
-	printf("SKIBiDI TOILET 67 41 21 61 LMNOP BASH MODE HEHEHE HAW MISS ME SIGMAS YEEEEEEEEEEEEEEEEEEEEE HAWWWWWWWWWWWWWWW");
 }
 void competition_initialize() {
 	initialize();
