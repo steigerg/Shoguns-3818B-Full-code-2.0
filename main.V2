@@ -16,11 +16,9 @@ pros::Rotation xrot(12);
 pros::Rotation yrot(13);
 pros::ADIDigitalOut ML('A');
 
-// Global variables for position
-// Using volatile to ensure task updates are seen
-volatile double botx = 0.0; //placeholer values (need do decide start position)
-volatile double boty = 0.0;
-volatile double both = 0.0;
+static double botx = 0.0; //placeholer values (need do decide start position)
+static double boty = 0.0;
+static double both = 0.0;
 static double starting_heading = 0.0;
 
 // A = left side of the park zone in the back
@@ -54,34 +52,36 @@ const int ekd = 0;
 
 double saved_drive_error = 0.0;
 
-double rad2deg = 180.0 / M_PI;
+double inith = 0.0;
+double initv = 0.0;
+
+double rad2deg = 180.0 / acos(-1.0);
 double deg2rad = M_PI / 180.0;
 
 double adjustment = .01; // need to tune dis
 
 const double conversion_jerry2in = 6.0/36.0;
 
-// Task to track position
 void updatepose(void* ignore){
-    // local variables for delta calculation
+    // 1. Initialize "Previous" variables outside the loop
     double prev_x = 0;
     double prev_y = 0;
 
+    // Reset sensors ONCE at the start
     xrot.reset_position();
     yrot.reset_position();
 
+    // 2. Infinite Loop required for tasks
     while(true) {
-        // get current raw values
         double curr_x = xrot.get_position(); 
         double curr_y = yrot.get_position();
         double curr_h = inertial.get_heading();
 
-        // calculate change
-        double delta_x = (curr_x - prev_x) * (1.0/36000.0); // simple conversion placeholder
+        double delta_x = (curr_x - prev_x) * (1.0/36000.0); 
         double delta_y = (curr_y - prev_y) * (1.0/36000.0);
 
-        // rotate to global coordinates
         double theta = -curr_h * deg2rad; 
+        
         botx += delta_x * cos(theta) - delta_y * sin(theta);
         boty += delta_x * sin(theta) + delta_y * cos(theta);
         both = curr_h;
@@ -89,273 +89,397 @@ void updatepose(void* ignore){
         prev_x = curr_x;
         prev_y = curr_y;
 
-        // printf("X: %.2f Y: %.2f H: %.2f\n", botx, boty, both);
-        pros::delay(10);
+        pros::delay(10); 
     }
 }
 
 void initialize() {
-    pros::lcd::initialize();
-    left_mg.move_velocity(0);
-    right_mg.move_velocity(0);
-    Hood.move_velocity(0);
-    Top.move_velocity(0);
-    Front.move_velocity(0);
-    Storage.move_velocity(0);
+	left_mg.move_velocity(0);
+	right_mg.move_velocity(0);
+	Hood.move_velocity(999);
+	Top.move_velocity(999);
+	Front.move_velocity(999);
+	Storage.move_velocity(999);
+	inertial.reset();
+	if(inertial.is_calibrating()){
+		printf("imu_sensor is calibrating");
+	}
+	xrot.reset();
+	yrot.reset();
 
-    inertial.reset();
-    while(inertial.is_calibrating()){
-        printf("imu_sensor is calibrating");
-        pros::delay(10);
-    }
-    xrot.reset_position();
-    yrot.reset_position();
-
-    pros::Task odometry_task_pose(updatepose, nullptr);
+	pros::Task odometry_task_pose(updatepose, nullptr);
 }
 
 void disabled() {
 }
 void competition_initialize() {
-    initialize();
+	initialize();
 }
 
 
 static double vperc(double perc) {
-    return (perc / 100.0) * 200.0;
+	return (perc / 100.0) * 200.0;
 }
 
 void score_bottom(int vel, bool yn) {
-    if (yn) {
-        Front.move_velocity(-vperc(vel));
-        Storage.move_velocity(-vperc(vel));
-    } else {
-        Front.move_velocity(0);
-        Storage.move_velocity(0);
-    }
+	if (yn) {
+		Front.move_velocity(-vperc(vel));
+		Storage.move_velocity(-vperc(vel));
+	} else {
+		Front.move_velocity(0);
+		Storage.move_velocity(0);
+	}
 }
 
 void score_top(int vel, bool yn) {
-    if (yn) {
-        Front.move_velocity(vperc(vel));
-        Storage.move_velocity(-vperc(vel));
-        Hood.move_velocity(vperc(vel));
-        Top.move_velocity(vperc(vel));
-    } else {
-        Front.move_velocity(0);
-        Storage.move_velocity(0);
-        Hood.move_velocity(0);
-        Top.move_velocity(0);
-    }
+	if (yn) {
+		Front.move_velocity(vperc(vel));
+		Storage.move_velocity(-vperc(vel));
+		Hood.move_velocity(vperc(vel));
+		Top.move_velocity(vperc(vel));
+	} else {
+		Front.move_velocity(0);
+		Storage.move_velocity(0);
+		Hood.move_velocity(0);
+		Top.move_velocity(0);
+	}
 }
 
 void score_mid(int vel, bool yn) {
-    if (yn) {
-        Front.move_velocity(vperc(vel));
-        Storage.move_velocity(-vperc(vel));
-        Top.move_velocity(-vperc(vel));
-    } else {
-        Front.move_velocity(0);
-        Storage.move_velocity(0);
-        Top.move_velocity(0);
-    }
+	if (yn) {
+		Front.move_velocity(vperc(vel));
+		Storage.move_velocity(-vperc(vel));
+		Top.move_velocity(-vperc(vel));
+	} else {
+		Front.move_velocity(0);
+		Storage.move_velocity(0);
+		Top.move_velocity(0);
+	}
 }
 
 void intake(int vel, bool yn) {
-    if (yn) {
-        Front.move_velocity(vperc(vel));
-        Storage.move_velocity(-vperc(vel));
-    } else {
-        Front.move_velocity(0);
-        Storage.move_velocity(0);
-    }
+	if (yn) {
+		Front.move_velocity(vperc(vel));
+		Storage.move_velocity(-vperc(vel));
+	} else {
+		Front.move_velocity(0);
+		Storage.move_velocity(0);
+	}
 }
 
 void almost_top(int vel, bool yn) {
-    if (yn) {
-        Front.move_velocity(vperc(vel));
-        Storage.move_velocity(-vperc(vel));
-        Hood.move_velocity(-vperc(vel));
-        Top.move_velocity(vperc(vel));
-    } else {
-        Front.move_velocity(0);
-        Storage.move_velocity(0);
-        Hood.move_velocity(0);
-        Top.move_velocity(0);
-    }
+	if (yn) {
+		Front.move_velocity(vperc(vel));
+		Storage.move_velocity(-vperc(vel));
+		Hood.move_velocity(-vperc(vel));
+		Top.move_velocity(vperc(vel));
+	} else {
+		Front.move_velocity(0);
+		Storage.move_velocity(0);
+		Hood.move_velocity(0);
+		Top.move_velocity(0);
+	}
 }
 
 void opcontrol() {
-    double speed = 1;
-    while (true){
-        double ly = master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
-        double lx = master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X);
-        
-        // arcade drive
-        left_mg.move_velocity(vperc((ly + lx) * speed));
-        right_mg.move_velocity(vperc((ly - lx) * speed));
+	double speed = 1;
+	while (true){
+		left_mg.move_velocity(vperc(((((pow(master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y), 2)*adjustment) *-1 - pow(master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X), 2)*adjustment))) * -speed));
+		right_mg.move_velocity(vperc(((((pow(master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y), 2)*adjustment) *-1 + pow(master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X), 2)*adjustment))) * -speed));
 
-        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L1)) {
+		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L1)) {
             score_bottom(100, true);
-        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L2)) {
+        } 
+        else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L2)) {
             intake(100, true);
-        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R1)) {
+        } 
+        else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R1)) {
             score_top(100, true);
-        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
+        } 
+        else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
             score_mid(100, true);
-        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_A)) {
+        } 
+        else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_A)) {
             almost_top(100, true);
-        } else {
-            // Stop everything if no buttons
-            score_bottom(100, false);
-            score_mid(100, false);
-            intake(100, false);
-            score_top(100, false);
+        } 
+        else {
+            // Nothing pressed? Stop everything.
+            score_bottom(0, false);
+            intake(0, false);
+            score_top(0, false);
+            score_mid(0, false);
+            almost_top(0, false);
         }
 
-        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_UP)) {
-            speed = 1.0;
-        }
-        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
-            speed = 0.3;
-        }
-        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_X)) {
-            ML.set_value(false);
-        }
-        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_B)) {
-            ML.set_value(true);
-        }
+        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_UP)) speed = 1.0;
+        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) speed = 0.3;
+        
+        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_X)) ML.set_value(false);
+        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_B)) ML.set_value(true);
 
-        pros::delay(20);
-    }
+        pros::delay(20);	}
 }
+
+
 
 
 //odometry + PID :(
 void turn(double ang, double kd, double kp, double timeout) {
-    double error = 0;
-    double prev_error = 0;
-    double derivative = 0;
-    double starting_time = pros::millis();
-    
-    // Normalize target angle
-    while (ang > 180) ang -= 360;
-    while (ang < -180) ang += 360;
+	double direction = 0;
+	double old_error = 0;
+	double Raw_angle = inertial.get_heading() + starting_heading;
+	double shead = Raw_angle;
+	int is_done = 0;
+	double derivative = 0;
+	double gyro_rate = 0;
+	double starting_time = pros::millis();
+	while (Raw_angle > 180) { 
+		Raw_angle -= 360;
+	}
+	while (Raw_angle < -180) {
+		Raw_angle += 360;
+	}
+	double error = ang - Raw_angle;
+	while (is_done < 10){
 
-    int is_done = 0;
+		if (error > -0.01 && error < 0.01){
+			is_done = is_done + 1;
+		} else {
+			is_done = 0;
+		}
 
-    while (is_done < 10){
-        double Raw_angle = inertial.get_heading();
-        
-        // Calculate shortest path error
-        error = ang - Raw_angle;
-        while (error > 180) error -= 360;
-        while (error < -180) error += 360;
+		Raw_angle = inertial.get_heading() + starting_heading;
+		while (Raw_angle > 180) { 
+			Raw_angle -= 360;
+		}
+		while (Raw_angle < -180) {
+			Raw_angle += 360;
+		}
+		double shead = Raw_angle;
+		double error = ang - Raw_angle;
 
-        if (fabs(error) < 1.0){
-            is_done = is_done + 1;
-        } else {
-            is_done = 0;
-        }
+		gyro_rate = inertial.get_gyro_rate().z; // degrees per second
+        derivative = -gyro_rate; // negative in order to slow down the bot
+		double tvel = kp * error + kd * derivative;
 
-        if ((pros::millis() - starting_time) > timeout*1000) {
-            break;
-        }
+		if ((pros::millis() - starting_time) > timeout*1000) {
+			break;
+		}
 
-        derivative = error - prev_error;
-        double tvel = kp * error + kd * derivative;
+		if (shead < 0 && ang < 0) {
+			if (ang < shead) {
+				direction = -1;
+			}
+			if (ang > shead) {
+				direction = 1;
+			}
+		}
+		else if (shead > 0 && ang > 0) {
+			if (ang < shead) {
+				direction = 1;
+			}
+			if (ang > shead) {
+				direction = -1;
+			}
+		}
+		else if (shead > 0 && ang < 0) {
+			if (ang < -1*shead) {
+				direction = -1;
+			}
+			if (ang > -1*shead) {
+				direction = 1;
+			}
+		}
+		else if (shead < 0 && ang > 0) {
+			if (ang < -1*shead) {
+				direction = 1;
+			}
+			if (ang > -1*shead) {
+				direction = -1;
+			}
+		}
 
-        left_mg.move_velocity(vperc(tvel));
-        right_mg.move_velocity(vperc(-tvel));
+		left_mg.move_velocity(-direction*(vperc(tvel)));
+		right_mg.move_velocity(direction*(vperc(tvel)));
 
-        prev_error = error;
-        pros::delay(20);
-    }
-    right_mg.move_velocity(0);
-    left_mg.move_velocity(0);
+		pros::delay(20);
+		old_error = error;
+	}
+	right_mg.move_velocity(0);
+	left_mg.move_velocity(0);
 }
 
-// simple drive logic
+double drive_error_correction(double kd, double kp, double error) {
+	double old_error = saved_drive_error;
+	double new_error = error;
+	double derivative = (new_error - old_error)/0.02;
+	double tvel = error * kp + kd * derivative;
+	saved_drive_error = new_error;
+	return tvel;
+}
+
+double abs2(double value) {
+	if (value < 0) {
+		value = -1 * value;
+	}
+	return value;
+}
+
 void drive(double dis, double kd, double kp, double ekd, double ekp, double timeout) {
-    left_mg.tare_position();
-    right_mg.tare_position();
-    
-    double error = 0;
-    double prev_error = 0;
-    double derivative = 0;
-    double starting_time = pros::millis();
-    int is_done = 0;
+	double relerror = 0;
+	double drive_correction = 0;
+	double raw_dis = yrot.get_position()/36000;
+	double raw_xerror = xrot.get_position()/36000;
+	double sdis = raw_dis;
+	int is_done = 0;
+	int direction = 0;
+	double distance_derivative_1 = 0;
+	double distance_derivative_2 = 0;
+	double distance_derivative_3 = 0;
+	double smoothed_distance_derivative = 0;
+	double correction_check = 0;
+	double starting_time = pros::millis();
+	double error = dis - sdis;
+	double old_error = error;
+	while (is_done < 10) {
+		if (fabs(error) > 0.01 && fabs(error) < 0.1) {
+			is_done += 1;
+		} else {
+			is_done = 0;
+		}
 
-    // convert inches to ticks if needed (placeholder conversion)
-    double target_ticks = dis * 360.0 / (2.75 * M_PI); 
+		if ((pros::millis() - starting_time) > timeout*1000) {
+			break;
+		}
 
-    while (is_done < 10) {
-        double current_pos = (left_mg.get_position(0) + right_mg.get_position(0)) / 2.0;
-        error = target_ticks - current_pos;
+		if (xrot.get_position()/36000 > 0 && raw_xerror > 0) {
+			relerror = (abs2(xrot.get_position()/36000) - abs2(raw_xerror)) * 2;
+		}
+		else if (xrot.get_position()/36000 < 0 && raw_xerror > 0) {
+			relerror = (abs2(xrot.get_position()/36000) - raw_xerror) * 2;
+		}
+		else if (xrot.get_position()/36000 > 0 && raw_xerror < 0) {
+			relerror = (xrot.get_position()/36000 - abs2(raw_xerror)) * 2;
+			}
+		else if (xrot.get_position()/36000 < 0 && raw_xerror < 0) {
+			relerror = (abs2(xrot.get_position()/36000) - abs2(raw_xerror)) * 2;
+		}
 
-        if (fabs(error) < 10) { // low tolerance check
-            is_done += 1;
-        } else {
-            is_done = 0;
-        }
+		if (relerror < .1) {
+			drive_correction = drive_error_correction(ekd, ekp, relerror);
+		}
+		else {
+			drive_correction = 0;
+			saved_drive_error = 0;
+		}
 
-        if ((pros::millis() - starting_time) > timeout*1000) {
-            break;
-        }
+		raw_dis = yrot.get_position()/36000;
+		error = dis - raw_dis;
 
-        derivative = error - prev_error;
-        double tvel = kp * error + kd * derivative;
+		distance_derivative_3 = distance_derivative_2;
+        distance_derivative_2 = distance_derivative_1;
+        distance_derivative_1 = (error - old_error)/0.02;
+        smoothed_distance_derivative = (distance_derivative_1 + distance_derivative_2 + distance_derivative_3)/3;
+		double tvel = error * kp + kd * smoothed_distance_derivative + 10;
 
-        left_mg.move_velocity(vperc(tvel));
-        right_mg.move_velocity(vperc(tvel));
+		if (sdis < 0 && dis < 0) {
+			if (dis < sdis) {
+				direction = -1;
+			}
+			if (dis > sdis) {
+				direction = 1;
+			}
+		}
+		else if (sdis > 0 && dis > 0) {
+			if (dis < sdis) {
+				direction = 1;
+			}
+			if (dis > sdis) {
+				direction = -1;
+			}
+		}
+		else if (sdis > 0 && dis < 0) {
+			if (dis < -1*sdis) {
+				direction = -1;
+			}
+			if (dis > -1*sdis) {
+				direction = 1;
+			}
+		}
+		else if (sdis < 0 && dis > 0) {
+			if (dis < -1*sdis) {
+				direction = 1;
+			}
+			if (dis > -1*sdis) {
+				direction = -1;
+			}
+		}	
 
-        prev_error = error;
-        pros::delay(20);
-    }
-    left_mg.move_velocity(0);
-    right_mg.move_velocity(0);
+		if (xrot.get_position()/36000 < 0 && raw_xerror > 0) {
+			correction_check = (abs2(xrot.get_position()/36000) - raw_xerror) * 2;
+		}
+		else if (xrot.get_position()/36000 > 0 && raw_xerror < 0) {
+			correction_check = (xrot.get_position()/36000 + raw_xerror) * 2;
+			}
+		else {
+			correction_check = (xrot.get_position()/36000 - raw_xerror) * 2;
+		}
+
+
+		if (correction_check > 0) {
+			left_mg.move_velocity(direction * vperc(fabs(tvel + drive_correction)));
+			right_mg.move_velocity(direction * vperc(fabs(tvel - drive_correction))); // will need to tune the +/- here
+		}
+		else {
+			left_mg.move_velocity(direction * vperc(fabs(tvel - drive_correction)));
+			right_mg.move_velocity(direction * vperc(fabs(tvel + drive_correction)));
+		} 
+
+		pros::delay(20);
+
+		old_error = error;
+	}
+	
 }
 
 void cordon(double x, double y, double dkd, double dkp, double tkd, double tkp, double theta, double dtimeout, double ttimeout) {
-    double difx = x - botx;
-    double dify = y - boty;
-    double desired_heading = std::atan2(dify, difx) * rad2deg;
-    
-    while (desired_heading > 180.0) desired_heading -= 360.0;
-    while (desired_heading < -180.0) desired_heading += 360.0;
-    
-    double drive_distance = std::hypot(difx, dify);
-    
-    turn(desired_heading, tkd, tkp, ttimeout);
-    pros::delay(100);
-    drive(drive_distance, dkd, dkp, 0, 0, dtimeout); // ignoring ekp/ekd for now
-    
-    if (theta != 999) { // 999 is magic number for no turn
-        turn(theta, tkd, tkp, ttimeout);
-    }
+	double difx = x - botx;
+	double dify = y - boty;
+	double desired_heading = std::atan2(dify, difx) * rad2deg;
+	while (desired_heading > 180.0) desired_heading -= 360.0;
+	while (desired_heading < -180.0) desired_heading += 360.0;
+	double drive_distance = std::hypot(difx, dify);
+	turn(desired_heading, tkd, tkp, ttimeout);
+	pros::delay(100);
+	drive(drive_distance, dkd, dkp, ekp, ekd, dtimeout);
+	if (theta != 0) {
+		turn(theta, tkd, tkp, ttimeout);
+	}
 }
 
 
 //auton
 
 void safeautonbottom() {
-    // MUST UPDATE BOT STARTING POSITION VAlUES, X = -44.822*conversion_jerry2in, Y = -17.533*conversion_jerry2in, H = 180
-    // reset global position manually here if needed
-    
-    cordon(-54.604*conversion_jerry2in, -46.265*conversion_jerry2in, .5, .5, .2, .2, 180, 3, 3);
-    intake(100, true);
-    ML.set_value(true);
-    pros::delay(100);
-    cordon(100000000, -46.265*conversion_jerry2in, .5, .5, .2, .2, 180, 4, 4);
-    pros::delay(100);
-    cordon(-45.128*conversion_jerry2in, -46.265*conversion_jerry2in, .5, .5, .2, .2, 0, 4, 4);
-    pros::delay(100);
-    ML.set_value(false);
-    cordon(-29.234*conversion_jerry2in, -47.793*conversion_jerry2in, .5, .5, .2, .2, 0, 2.5, 2.5);
-    pros::delay(100);
-    intake(100, false);
-    pros::delay(50);
-    score_top(100, true);
+	// MUST UPDATE BOT STARTING POSITION VAlUES, X = -44.822*conversion_jerry2in, Y = -17.533*conversion_jerry2in, H = 180
+	cordon(-54.604*conversion_jerry2in, -46.265*conversion_jerry2in, .5, .5, .2, .2, 180, 3, 3);
+	intake(100, true);
+	ML.set_value(true);
+	pros::delay(100);
+	cordon(100000000, -46.265*conversion_jerry2in, .5, .5, .2, .2, 180, 4, 4);
+	pros::delay(100);
+	cordon(-45.128*conversion_jerry2in, -46.265*conversion_jerry2in, .5, .5, .2, .2, 0, 4, 4);
+	pros::delay(100);
+	ML.set_value(false);
+	cordon(-29.234*conversion_jerry2in, -47.793*conversion_jerry2in, .5, .5, .2, .2, 0, 2.5, 2.5);
+	pros::delay(100);
+	intake(100, false);
+	pros::delay(50);
+	score_top(100, true);
+
+
+
+
 }
 // void cordon(double x, double y, double dkd, double dkp, double tkd, double tkp, double theta)
 void midautonbottom() {
@@ -383,5 +507,5 @@ void sauton() {
 }
 
 void autonomous() {
-    turn(180, .5, 3.5, 2);
+	turn(180, .5, 3.5, 2);
 }
