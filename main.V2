@@ -189,20 +189,15 @@ void opcontrol() {
 
 		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L1)) {
             score_bottom(100, true);
-        } 
-        else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L2)) {
+        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L2)) {
             intake(100, true);
-        } 
-        else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R1)) {
+        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R1)) {
             score_top(100, true);
-        } 
-        else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
+        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
             score_mid(100, true);
-        } 
-        else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_A)) {
+        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_A)) {
             almost_top(100, true);
-        } 
-        else {
+        } else {
             // Nothing pressed? Stop everything.
             score_bottom(0, false);
             intake(0, false);
@@ -328,8 +323,8 @@ double abs2(double value) {
 void drive(double dis, double kd, double kp, double ekd, double ekp, double timeout) {
 	double relerror = 0;
 	double drive_correction = 0;
-	double raw_dis = yrot.get_position()/36000;
-	double raw_xerror = xrot.get_position()/36000;
+	double raw_dis = yrot.get_position()/36000.0;
+	double raw_xerror = xrot.get_position()/36000.0;
 	double sdis = raw_dis;
 	int is_done = 0;
 	int direction = 0;
@@ -352,17 +347,17 @@ void drive(double dis, double kd, double kp, double ekd, double ekp, double time
 			break;
 		}
 
-		if (xrot.get_position()/36000 > 0 && raw_xerror > 0) {
-			relerror = (abs2(xrot.get_position()/36000) - abs2(raw_xerror)) * 2;
+		if (xrot.get_position()/36000.0 > 0 && raw_xerror > 0) {
+			relerror = (abs2(xrot.get_position()/36000.0) - abs2(raw_xerror)) * 2;
 		}
-		else if (xrot.get_position()/36000 < 0 && raw_xerror > 0) {
-			relerror = (abs2(xrot.get_position()/36000) - raw_xerror) * 2;
+		else if (xrot.get_position()/36000.0 < 0 && raw_xerror > 0) {
+			relerror = (abs2(xrot.get_position()/36000.0) - raw_xerror) * 2;
 		}
-		else if (xrot.get_position()/36000 > 0 && raw_xerror < 0) {
-			relerror = (xrot.get_position()/36000 - abs2(raw_xerror)) * 2;
+		else if (xrot.get_position()/36000.0 > 0 && raw_xerror < 0) {
+			relerror = (xrot.get_position()/36000.0 - abs2(raw_xerror)) * 2;
 			}
-		else if (xrot.get_position()/36000 < 0 && raw_xerror < 0) {
-			relerror = (abs2(xrot.get_position()/36000) - abs2(raw_xerror)) * 2;
+		else if (xrot.get_position()/36000.0 < 0 && raw_xerror < 0) {
+			relerror = (abs2(xrot.get_position()/36000.0) - abs2(raw_xerror)) * 2;
 		}
 
 		if (relerror < .1) {
@@ -373,7 +368,7 @@ void drive(double dis, double kd, double kp, double ekd, double ekp, double time
 			saved_drive_error = 0;
 		}
 
-		raw_dis = yrot.get_position()/36000;
+		raw_dis = yrot.get_position()/36000.0;
 		error = dis - raw_dis;
 
 		distance_derivative_3 = distance_derivative_2;
@@ -415,14 +410,14 @@ void drive(double dis, double kd, double kp, double ekd, double ekp, double time
 			}
 		}	
 
-		if (xrot.get_position()/36000 < 0 && raw_xerror > 0) {
-			correction_check = (abs2(xrot.get_position()/36000) - raw_xerror) * 2;
+		if (xrot.get_position()/36000.0 < 0 && raw_xerror > 0) {
+			correction_check = (abs2(xrot.get_position()/36000.0) - raw_xerror) * 2;
 		}
-		else if (xrot.get_position()/36000 > 0 && raw_xerror < 0) {
-			correction_check = (xrot.get_position()/36000 + raw_xerror) * 2;
+		else if (xrot.get_position()/36000.0 > 0 && raw_xerror < 0) {
+			correction_check = (xrot.get_position()/36000.0 + raw_xerror) * 2;
 			}
 		else {
-			correction_check = (xrot.get_position()/36000 - raw_xerror) * 2;
+			correction_check = (xrot.get_position()/36000.0 - raw_xerror) * 2;
 		}
 
 
