@@ -1,0 +1,739 @@
+#include "main.h"
+#include "pros/misc.h"
+#include "pros/rtos.h"
+#include "pros/rtos.hpp"
+#include <cmath>
+#include <cstdio>
+
+pros::Controller master(pros::E_CONTROLLER_MASTER);
+pros::MotorGroup left_mg({-15, -16, 11});
+pros::MotorGroup right_mg({12, 13, -14});
+
+
+
+pros::Motor Hood(6);
+pros::Motor Storage(2);
+pros::Motor Top(3);
+pros::Motor Front(4);
+
+pros::Imu inertial(19);
+pros::Rotation xrot(20);
+pros::Rotation yrot(1);
+pros::ADIDigitalOut ML('H');
+pros::ADIDigitalOut Hook('E');
+pros::ADIDigitalOut agi('A');
+const double conversion_jerry2in = 36.0/35.0;
+
+
+
+static double botx = 0;
+static double boty = 0;
+static double both = 0;
+static double starting_heading = 0.0;
+
+// A = left side of the park zone in the back
+const int startAx = 0; //need to test dis is placeholder )
+const int startAy = 0;
+const int startAang = 0;
+
+// B = left side of the park zone in the front
+const int startBx = 0; //need to test dis is placeholder )
+const int startBy = 0;
+const int startBang = 0;
+
+// C = right side of the park zone in the fornt
+const int startCx = 0; //need to test dis is placeholder )
+const int startCy = 0;
+const int startCang = 0;
+
+// D = right side of the park zone in the back
+const int startDx = 0; //need to test dis is placeholder )
+const int startDy = 0;
+const int startDang = 0;
+
+
+static double debug_turn_error = 0.0;
+static double debug_turn_power = 0.0;
+// middle goal is (0,0)
+// heading 0 is facing perpendicular to field wall
+
+//.05 tkd
+//3.5 tkp
+
+const int ekp = 0;// need to tune dis
+const int ekd = 0;
+
+double saved_drive_error = 0.0;
+
+double inith = 0.0;
+double initv = 0.0;
+
+double rad2deg = 180.0 / acos(-1.0);
+double deg2rad = M_PI / 180.0;
+
+double adjustment = .01; // need to tune dis
+
+double ticks_per_rev = 36000.0; 
+double wheel_diameter = 2.0;   
+double inches_per_tick = (wheel_diameter * M_PI) / ticks_per_rev;
+
+double headingside = 1;
+
+
+
+pros::Mutex odom_lock;
+
+double normalise_angle(double angle) {
+    angle = fmod(angle, 360.0);
+
+    if (angle > 180.0)  angle -= 360.0;
+    if (angle < -180.0) angle += 360.0;
+
+    return angle;
+}
+
+void updatepose(void* ignore){
+    double prev_x = 0;
+    double prev_y = 0;
+    int loop_count = 0;
+    int display_counter = 0;
+
+    xrot.reset_position();
+    yrot.reset_position();
+
+    while(true) {
+        loop_count++;
+        
+        // 1. Get Sensor Readings
+        double curr_x = xrot.get_position(); 
+        double curr_y = yrot.get_position();
+        double curr_h = inertial.get_heading() + starting_heading;
+
+        // 2. Check for IMU errors
+        if (std::isinf(curr_h) || std::isnan(curr_h)) {
+             pros::delay(10);
+             continue; 
+        }
+
+        // 3. Calculate deltas
+        double delta_x = (curr_x - prev_x) * inches_per_tick; 
+        double delta_y = (curr_y - prev_y) * inches_per_tick;
+        double theta = -normalise_angle(curr_h) * deg2rad;
+
+        // 4. Update odometry with mutex protection - USE TIMEOUT
+        if (!odom_lock.take(50)) {
+            // If we can't get the lock in 50ms, skip this update
+            pros::delay(10);
+            continue;
+        }
+        
+        botx += delta_x * cos(theta) - delta_y * sin(theta);
+        boty += delta_x * sin(theta) + delta_y * cos(theta);
+        both = normalise_angle(curr_h);
+        
+        odom_lock.give();
+
+        prev_x = curr_x;
+        prev_y = curr_y;
+
+        // 5. CRITICAL: Only update LCD every 10 loops (reduces crash risk)
+        display_counter++;
+        if (display_counter >= 10) {
+            display_counter = 0;
+            pros::lcd::print(0, "X:%.1f Y:%.1f H:%.0f", botx, boty, both);
+        }
+
+        pros::delay(20); 
+    }
+}
+pros::Task odometry_task_pose(updatepose, nullptr);
+
+void initialize() {
+    
+    pros::lcd::initialize();
+    
+    // 1. Reset the IMU
+    inertial.reset(); 
+    
+    // 2. WAIT for calibration to finish (This is the missing piece)
+    int time = 0;
+    while(inertial.is_calibrating()) {
+        pros::lcd::print(0, "IMU Calibrating... %d", time);
+        pros::delay(20);
+        time += 20;
+    }
+    pros::lcd::print(0, "IMU READY");
+
+    // 3. Start Odometry and Reset other sensors
+    left_mg.move_velocity(0);
+    right_mg.move_velocity(0);
+    Hood.move_velocity(0);
+    Top.move_velocity(0);
+    Front.move_velocity(0);
+    Storage.move_velocity(0);
+    xrot.reset();
+    yrot.reset();
+    yrot.set_reversed(true);
+}
+
+void disabled() {
+}
+void competition_initialize() {
+
+}
+
+
+static double vperc(double perc) {
+	return (perc / 100.0) * 200.0;
+}
+
+void score_bottom(int vel, bool yn) {
+	if (yn) {
+		Front.move_velocity(-vperc(vel));
+		Storage.move_velocity(-vperc(vel));
+	} else {
+		Front.move_velocity(0);
+		Storage.move_velocity(0);
+	}
+}
+
+void score_top(int vel, bool yn) {
+	if (yn) {
+		Front.move_velocity(vperc(vel));
+		Storage.move_velocity(-vperc(vel));
+		Hood.move_velocity(vperc(vel));
+		Top.move_velocity(vperc(vel));
+	} else {
+		Front.move_velocity(0);
+		Storage.move_velocity(0);
+		Hood.move_velocity(0);
+		Top.move_velocity(0);
+	}
+}
+
+void score_mid(int vel, bool yn) {
+	if (yn) {
+		Front.move_velocity(vperc(vel));
+		Storage.move_velocity(-vperc(vel));
+		Top.move_velocity(-vperc(vel));
+	} else {
+		Front.move_velocity(0);
+		Storage.move_velocity(0);
+		Top.move_velocity(0);
+	}
+}
+
+void intake(int vel, bool yn) {
+	if (yn) {
+		Front.move_velocity(vperc(vel));
+		Storage.move_velocity(vperc(vel));
+	} else {
+		Front.move_velocity(0);
+		Storage.move_velocity(0);
+	}
+}
+
+void almost_top(int vel, bool yn) {
+	if (yn) {
+		Front.move_velocity(vperc(vel));
+		Storage.move_velocity(-vperc(vel));
+		Hood.move_velocity(-vperc(vel));
+		Top.move_velocity(vperc(vel));
+	} else {
+		Front.move_velocity(0);
+		Storage.move_velocity(0);
+		Hood.move_velocity(0);
+		Top.move_velocity(0);
+	}
+}
+
+void opcontrol() {
+	double isdone = 0;
+	double speed = 1;
+	while (true){
+		int forward = master.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+        int turn = master.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
+
+        int left_power = (forward - turn*-1) * speed;
+        int right_power = (forward + turn*-1) * speed;
+
+        left_mg.move(left_power);
+        right_mg.move(right_power);
+
+
+		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L1)) {
+            score_bottom(100, true);
+        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_L2)) {
+            intake(100, true);
+        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R1)) {
+            score_top(100, true);
+        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
+            score_mid(100, true);
+        } else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_A)) {
+            almost_top(100, true);
+        } else {
+            score_bottom(0, false);
+            intake(0, false);
+            score_top(0, false);
+            score_mid(0, false);
+            almost_top(0, false);
+        }
+
+        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_UP)) speed = 1.0;
+        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) speed = 0.4;
+        
+        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_X)) ML.set_value(false);
+        if (master.get_digital(pros::E_CONTROLLER_DIGITAL_B)) ML.set_value(true);
+
+		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_A)) Hook.set_value(true);
+		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_Y)) Hook.set_value(false);
+		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT)) agi.set_value(true);
+		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)) agi.set_value(false);
+		 
+        pros::delay(30);	}
+}
+
+
+//odometry + PID :(
+
+double abs2(double value) {
+	if (value < 0) {
+		value = -1 * value;
+	}
+	return value;
+}
+void turn(double ang, double kd, double kp, double timeout) {
+    left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+    right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+    
+    double target_heading = normalise_angle(ang);
+    double error = 0;
+    double prev_error = 0;
+    double derivative = 0;
+    double tvel = 0;
+    
+    double starting_time = pros::millis();
+    int time_settled = 0;
+
+    while (true) {
+        // Get heading with timeout to prevent deadlock
+        double current_heading = 0;
+        if (odom_lock.take(50)) {
+            current_heading = both; 
+            odom_lock.give();
+        } else {
+            pros::delay(10);
+            continue;
+        }
+
+        // Calculate Error
+        error = normalise_angle(target_heading - current_heading);
+
+        // Prevent derivative kick on first loop
+        if (pros::millis() - starting_time < 20) { 
+            prev_error = error; 
+        }
+
+        derivative = error - prev_error;
+        prev_error = error;
+
+        tvel = (error * kp) + (derivative * kd);
+
+        left_mg.move_velocity(vperc(tvel));
+        right_mg.move_velocity(vperc(-tvel));
+
+        // Exit Logic
+        if (pros::millis() - starting_time > timeout * 1000) break;
+        if (fabs(error) < 1.0) time_settled += 20;
+        else time_settled = 0;
+        if (time_settled > 200) break;
+
+        pros::delay(20);
+    }
+    left_mg.move_velocity(0);
+    right_mg.move_velocity(0);
+}
+
+void drive(double dis, double kd, double kp, double ekd, double ekp, double timeout) {
+    left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+    right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+
+    // CHANGED: Record starting position, then drive relative to that
+    double start_pos = yrot.get_position() / 18000.0 * M_PI;
+    double target_distance = dis;  // Distance to travel from current position
+    
+    double error = target_distance;
+    double prev_error = error;
+    
+    double dist_derivative_1 = 0;
+    double dist_derivative_2 = 0;
+    double dist_derivative_3 = 0;
+    double dist_derivative_4 = 0;
+    double dist_derivative_5 = 0;
+    double dist_derivative_6 = 0;
+    double smoothed_derivative = 0;
+
+    double current_tvel = 0;
+    double slew_step = 3;
+
+    double starting_time = pros::millis();
+    
+    int time_settled = 0; 
+    double settle_threshold = 1; 
+
+    while (true) {
+        // CHANGED: Calculate how far we've traveled since start
+        double current_pos = yrot.get_position() / 18000.0 * M_PI;
+        double distance_traveled = current_pos - start_pos;
+        
+        // Error is how much further we need to go
+        error = target_distance - distance_traveled;
+
+        dist_derivative_6 = dist_derivative_5;
+        dist_derivative_5 = dist_derivative_4;
+        dist_derivative_4 = dist_derivative_3;
+        dist_derivative_3 = dist_derivative_2;
+        dist_derivative_2 = dist_derivative_1;
+        dist_derivative_1 = (error - prev_error) / 0.02; 
+        smoothed_derivative = (dist_derivative_1 + dist_derivative_2 + dist_derivative_3 + 
+                              dist_derivative_4 + dist_derivative_5 + dist_derivative_6) / 6;
+
+        prev_error = error;
+
+        double target_vel = (error * kp) + (smoothed_derivative * kd);
+
+        double step = target_vel - current_tvel;
+        if (step > slew_step) {
+            step = slew_step;
+        } else if (step < -slew_step) {
+            step = -slew_step;
+        }
+        current_tvel += step;
+
+        left_mg.move_velocity(vperc(current_tvel));
+        right_mg.move_velocity(vperc(current_tvel));
+
+        // Exit conditions
+        if ((pros::millis() - starting_time) > timeout * 1000) break;
+
+        if (fabs(error) < settle_threshold) {
+            time_settled += 1; 
+        } else {
+            time_settled = 0;   
+        }
+
+        if (time_settled > 5) break;
+
+        pros::delay(20);
+    }
+
+    left_mg.move_velocity(0);
+    right_mg.move_velocity(0);
+}
+
+
+void cordon(double target_x, double target_y, double dkd, double dkp, double tkd, double tkp, double theta, double dtimeout, double ttimeout) {
+    
+    // --- STEP 1: SNAPSHOT CURRENT POSITION WITH TIMEOUT ---
+    double curr_x = 0;
+    double curr_y = 0; 
+    double curr_h = 0;
+    
+    // FIX: Move attempts++ before continue
+    int attempts = 0;
+    while (attempts < 10) {
+        if (odom_lock.take(50)) {
+            curr_x = botx; 
+            curr_y = boty;
+            curr_h = both;
+            odom_lock.give();
+            break;
+        }
+        attempts++;  // MOVED HERE - before the delay
+        pros::delay(10);
+    }
+    
+    if (attempts >= 10) {
+        pros::lcd::print(0, "Cordon: Mutex timeout!");
+        return;
+    }
+
+    // --- STEP 2: CALCULATE PATH ---
+    double difx = target_x - curr_x;
+    double dify = target_y - curr_y;
+
+    double drive_distance = std::hypot(difx, dify);
+    double math_angle = std::atan2(dify, difx) * rad2deg;
+    double desired_heading = 90 - math_angle;
+    double drive_direction = 1.0; 
+
+    // --- STEP 3: EXECUTE MOVEMENTS ---
+    
+    if (fabs(normalise_angle(desired_heading - curr_h)) > 1.0) {
+        turn(desired_heading, tkd, tkp, ttimeout); 
+        pros::delay(100); 
+    }
+    ML.set_value(false);
+    drive(drive_distance * drive_direction, dkd, dkp, ekp, ekd, dtimeout);
+
+    if (theta != 0) { 
+        turn(theta, tkd, tkp, ttimeout);
+    }
+}
+
+
+//auton
+
+void set_pose(double x, double y, double heading, double headingside_param) {
+    while(true)   { 
+        if (odom_lock.take(50)) {  // 50ms timeout instead of TIMEOUT_MAX
+            botx = x;
+            boty = y;
+            headingside = headingside_param;
+            starting_heading = heading;
+            odom_lock.give();
+            break;
+        } else {
+            pros::lcd::print(0, "Set Pose: Mutex timeout!");
+        }
+    }
+    
+    // Print to confirm
+    pros::lcd::print(0, "POSE SET: %.2f %.2f", x, y);
+}
+void safeauton(bool rb, bool lr) {
+    double xdir = 1;
+    double ydir = 1;
+    double hdir = 1;
+
+    if (rb == true && lr == false) {
+        // Red Back (Right)
+        xdir = -1;
+        ydir = -1;
+        hdir = 1;
+        // SET POSE: X = -44.822, Y = -17.533, H = 180
+        set_pose(-44.822*conversion_jerry2in, -19.533*conversion_jerry2in, 180, 1);
+
+    } else if (rb == true && lr == true) {
+        // Red Front (Left)
+        xdir = -1;
+        ydir = 1;
+        hdir = -1;
+        // SET POSE: X = -44.822, Y = 17.533, H = -180
+        set_pose(-44.822*conversion_jerry2in, 19.533*conversion_jerry2in, 0, -1);
+
+    } else if (rb == false && lr == false) {
+        // Blue Back (Right)
+        xdir = 1;
+        ydir = 1;
+        hdir = 1;
+        // SET POSE: X = 44.822, Y = 17.533, H = 180
+        set_pose(44.822*conversion_jerry2in, 19.533*conversion_jerry2in, 180, 1);
+
+    } else if (rb == false && lr == true) {
+        // Blue Front (Left) -- THIS IS THE ONE YOU ARE RUNNING
+        xdir = 1;
+        ydir = -1;
+        hdir = -1;
+        // SET POSE: X = 44.822, Y = -17.533, H = -180
+        set_pose(44.822*conversion_jerry2in, -19.533*conversion_jerry2in, 0, -1 );
+}
+    
+    // Give the odometry a split second to update
+    pros::delay(50);
+    intake(100, true);
+	cordon(44.822*conversion_jerry2in*xdir, 46*conversion_jerry2in*ydir, 2, 8.5, 1, 1, 0, 3, 3);
+	ML.set_value(true);
+	pros::delay(100);
+	cordon(60*conversion_jerry2in*xdir, 46.962*conversion_jerry2in*ydir, 2, 4, 1, 1, 0, 2, 3);
+    pros::delay(100);
+    drive(2, 2, 8.5, 1, 1, 1);
+    pros::delay(100);
+    drive(-7, 2, 8.5, 1, 1, 2);
+    pros::delay(100);
+    ML.set_value(false);
+    pros::delay(100);
+    pros::lcd::print(3, "Heading after turn: %.2f", both);
+    pros::lcd::print(4, "botx after turn: %.2f", botx);
+    pros::lcd::print(5, "boty after turn: %.2f", boty);
+    pros::c::delay(100);
+    cordon(26*conversion_jerry2in*xdir, 47.1*conversion_jerry2in*ydir, 2, 8.5, 1, 1, 0, 5, 5);
+    pros::delay(100);
+	intake(100, false);
+	pros::delay(50);
+	score_top(100, true);
+    pros::delay(1000);
+    agi.set_value(true);
+    pros::delay(500);
+    agi.set_value(false);
+    pros::delay(1500);
+    agi.set_value(true);
+    pros::delay(500);
+    agi.set_value(false);
+    pros::delay(1500);
+    agi.set_value(true);
+    pros::delay(500);
+    agi.set_value(false);
+    pros::delay(1500);
+}
+
+void riskyauton(bool rb, bool lr) {
+	double xdir = 1;
+	double ydir = 1;
+	double hdir = 1;
+	if (rb == true && lr == false) {
+		xdir = -1;
+		ydir = -1;
+		hdir = 1;
+		//right red
+		// MUST UPDATE BOT STARTING POSITION VAlUES, X = -60.106*conversion_jerry2in, Y = -19.367*conversion_jerry2in, H = 180
+	} else if (rb == true && lr == true) {
+		xdir = -1;
+		ydir = 1;
+		hdir = -1;
+		//left red
+		// MUST UPDATE BOT STARTING POSITION VAlUES, X = -60.106*conversion_jerry2in, Y = 19.367*conversion_jerry2in, H = -180
+	} else if (rb == false && lr == false) {
+		xdir = 1;
+		ydir = 1;
+		hdir = 1;
+		//right blue
+		// MUST UPDATE BOT STARTING POSITION VAlUES, X = 60.106*conversion_jerry2in, Y = -19.367*conversion_jerry2in, H = 180
+	} else if (rb == false && lr == true) {
+		xdir = 1;
+		ydir = -1;
+		hdir = -1;
+		//left blue
+		// MUST UPDATE BOT STARTING POSITION VAlUES, X = 60.106*conversion_jerry2in, Y = -19.367*conversion_jerry2in, H = -180
+	}
+	cordon(44.822*conversion_jerry2in*xdir, 19.369*conversion_jerry2in*ydir, .5, .5, .2, .2, -90*hdir, 3, 3);
+	intake(100, true);
+	pros::delay(100);
+	cordon(28.928*xdir, 28.078*conversion_jerry2in*ydir, .5, .5, .2, .2, -90*hdir, 4, 4);
+	ML.set_value(true);
+    pros::delay(100);
+    cordon(13.033*conversion_jerry2in*xdir, 12.489*conversion_jerry2in*ydir, .5, .5, .2, .2, 90, 4, 4);
+	intake(100, false);
+    ML.set_value(false);
+    score_mid(100, true);
+    pros::delay(3000);
+    score_mid(100, false);
+	cordon(48.796*conversion_jerry2in*xdir, 47.335*conversion_jerry2in*ydir, .5, .5, .2, .2, 0, 2.5, 2.5);
+	ML.set_value(true);
+    intake(100, true);
+    pros::delay(100);
+    cordon(1000000000*conversion_jerry2in*xdir, 47.335*conversion_jerry2in*ydir, .5, .5, .2, .2, 0, 3, 2.5);
+    pros::delay(100);
+    cordon(30.762*conversion_jerry2in*xdir, 47.335*conversion_jerry2in*ydir, .5, .5, .2, .2, 0, 2.5, 2.5);
+
+
+}
+
+
+void skillsauton() {
+	//MUST UPDATE BOT STARTING POSITION VAlUES, X = -60.717, Y = -18.755, H = 90
+    set_pose(-60.717, 18.755, 90, 1);
+    drive(17.5, 2, 8.5, 1, 1, 4);
+    pros::delay(500);
+    intake(100, true);
+    turn(75, 1, 1, 2);
+    pros::delay(100);
+    drive(13, 2, 8.5, 1, 1, 4);
+    ML.set_value(true);
+    pros::delay(500);
+    drive(7, 2, 8.5, 1, 1, 4);
+    pros::delay(100);
+	cordon(-12.283*conversion_jerry2in, 12.283*conversion_jerry2in, 2, 8.5, 1, 1, 135, 3, 3);
+    pros::delay(100);
+    intake(100, false);
+	score_mid(100, true);
+    pros::delay(1000);
+    agi.set_value(true);
+    pros::delay(500);
+    agi.set_value(false);
+	pros::delay(2000);
+    score_mid(100, false);
+    drive(-7.5, 2, 8.5, 1, 1, 4);
+	cordon(-48.185*conversion_jerry2in, 46*conversion_jerry2in, 4, 8.5, 2, 1, -90, 4, 4);
+	ML.set_value(true);
+	pros::delay(100);
+	intake(100, true);
+    drive(15, 0, 4, 1, 1, 3);
+    //pros::delay(100);
+	//cordon(-20*conversion_jerry2in, -46.877*conversion_jerry2in, .5, .5, 0, 0, 90, 2.5, 2.5);
+	//ML.set_value(false);
+	//pros::delay(100);
+	//cordon(-29.845*conversion_jerry2in, -46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//intake(100, false);
+	//score_top(100, true);
+	//pros::delay(3000);
+	//score_top(100, false);
+	//cordon(-37.792*conversion_jerry2in, -46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//pros::delay(100);
+	//cordon(-31.985*conversion_jerry2in, -34.5*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//pros::delay(100);
+	//cordon(30.94*conversion_jerry2in, -34.5*conversion_jerry2in, .5, .5, 0, 0, 0, 5, 5);
+	//pros::delay(100);
+	//cordon(53.601*conversion_jerry2in, -46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//ML.set_value(true);
+	//pros::delay(100);
+	//intake(100, true);
+	//cordon(10000*conversion_jerry2in, -46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//pros::delay(100);
+	//cordon(20*conversion_jerry2in, -46.877*conversion_jerry2in, .5, .5, 0, 0, 90, 2.5, 2.5);
+	//pros::delay(100);
+	//ML.set_value(false);
+	//cordon(29.845*conversion_jerry2in, -46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//intake(100, false);
+	//score_top(100, true);
+	//pros::delay(3000);
+	//score_top(100, false);
+	//cordon(41.069*conversion_jerry2in, -46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//pros::delay(100);
+	//cordon(41.069*conversion_jerry2in, 46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 7.5, 2.5);
+	//ML.set_value(true);
+	//pros::delay(100);
+	//cordon(1000000*conversion_jerry2in, 46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 3, 2.5);
+	//pros::delay(100);
+	//cordon(20*conversion_jerry2in, 46.877*conversion_jerry2in, .5, .5, 0, 0, 90, 2.5, 2.5);
+	//pros::delay(100);
+	//ML.set_value(false);
+	//cordon(29.845*conversion_jerry2in, 46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//intake(100, false);
+	//score_top(100, true);
+	//pros::delay(3000);
+	//score_top(100, false);
+	//cordon(37.792*conversion_jerry2in, 46.962*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//pros::delay(100);
+	//cordon(31.985*conversion_jerry2in, 34.5*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//pros::delay(100);
+	//cordon(-31.985*conversion_jerry2in, 34.5*conversion_jerry2in, .5, .5, 0, 0, 0, 5, 2.5);
+	//pros::delay(100);
+	//cordon(-53.075*conversion_jerry2in, 46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//ML.set_value(true);
+	//pros::delay(100);
+	//intake(100, true);
+	//cordon(-1000*conversion_jerry2in, 46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 3, 2.5);
+	//pros::delay(100);
+	//cordon(-20*conversion_jerry2in, 46.877*conversion_jerry2in, .5, .5, 0, 0, 90, 2.5, 2.5);
+	//pros::delay(100);
+	//ML.set_value(false);
+	//cordon(-29.845*conversion_jerry2in, 46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//intake(100, false);
+	//score_top(100, true);
+	//pros::delay(3000);
+	//score_top(100, false);
+	//cordon(-38.46*conversion_jerry2in, 46.877*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//pros::delay(100);
+	//cordon(-38.46*conversion_jerry2in, 14.867*conversion_jerry2in, .5, .5, 0, 0, 0, 2.5, 2.5);
+	//pros::delay(100);
+	//cordon(-67.41*conversion_jerry2in, 0*conversion_jerry2in, .5, .5, 0, 0, 0, 10, 2.5);
+}	
+
+void autonomous() {
+	//turn(180, 1, 1, 1000000);
+	//pros::delay(1000);
+	//drive(24, 6, 9.5, 0, 0, 1000);
+    skillsauton();
+
+    }
